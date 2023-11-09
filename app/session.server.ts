@@ -24,8 +24,6 @@ type SessionFlashData = {
   };
 };
 
-const upstashRedisRestUrl = process.env.UPSTASH_REDIS_REST_URL;
-
 if (!process.env.UPSTASH_REDIS_REST_URL) {
   throw new Error("Missing environment variable DATABASE_URL");
 }
@@ -38,13 +36,6 @@ const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
-
-// using redis for session storage
-const headers = {
-  Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}`,
-  Accept: "application/json",
-  "Content-Type": "application/json",
-};
 
 const expiresToSeconds = (expires: Date | undefined) => {
   if (expires === undefined) {
@@ -62,43 +53,36 @@ export function createUpstashSessionStorage({ cookie }: any) {
     cookie,
     async createData(data, expires) {
       // Create a random id - taken from the core `createFileSessionStorage` Remix function.
-      const randomBytes = crypto.getRandomValues(new Uint8Array(10));
-      const id = Buffer.from(randomBytes).toString("hex");
+      const randomBytes = crypto.getRandomValues(new Uint8Array(4));
+      const uniqueKey = Buffer.from(randomBytes).toString("hex");
+      const id = `user:${data[USER_SESSION_KEY]}:${uniqueKey}`;
       // Call Upstash Redis HTTP API. Set expiration according to the cookie `expired property.
       // Note the use of the `expiresToSeconds` that converts date to seconds.
-      await redis.set(
-        id,
-        { data },
-        {
-          ex: expiresToSeconds(expires),
-        }
-      );
+      await redis.set(id, data, {
+        ex: expiresToSeconds(expires),
+      });
       return id;
     },
     async readData(id) {
       try {
-        const result = (await redis.get(id)) as { data: SessionData } | null;
+        const result = (await redis.get(id)) as SessionData | null;
         if (!result) throw new Error("No session found");
-        return result.data;
+        return result;
       } catch (error) {
         console.log(error);
         return null;
       }
     },
     async updateData(id, data, expires) {
-      await redis.set(
-        id,
-        { data },
-        {
-          ex: expiresToSeconds(expires),
-        }
-      );
+      await redis.set(id, data, {
+        ex: expiresToSeconds(expires),
+      });
     },
     async deleteData(id) {
-      await fetch(`${upstashRedisRestUrl}/del/${id}`, {
-        method: "post",
-        headers,
-      });
+      //   const results = await redis.scan(0, {
+      //     match: 'data:userId:*"}}',
+      //  });
+      await redis.del(id);
     },
   });
 }
