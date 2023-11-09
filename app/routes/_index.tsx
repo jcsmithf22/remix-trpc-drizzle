@@ -11,7 +11,7 @@ import { appRouter } from "~/server/router.server";
 import { z } from "zod";
 import { CheckIcon, Loader2, XIcon } from "lucide-react";
 import React from "react";
-import { getSession, commitSession, getUser } from "~/session.server";
+import { flashSession, getUser } from "~/session.server";
 import type { TRPCError } from "@trpc/server";
 import { toast as showToast } from "sonner";
 
@@ -23,9 +23,10 @@ export const meta: MetaFunction = () => {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const session = await getSession(request);
-  const user = await getUser({ session });
-  const message = session.get("message") || null;
+  const flash = await flashSession.getSession(request.headers.get("cookie"));
+  const message = flash.get("message");
+
+  const user = await getUser(request);
   const caller = appRouter.createCaller({ user });
   const todos = await caller.todos.all();
 
@@ -37,7 +38,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     {
       headers: {
-        "set-cookie": await commitSession(session),
+        "set-cookie": await flashSession.commitSession(flash),
       },
     }
   );
@@ -78,7 +79,7 @@ export async function action({ request }: ActionFunctionArgs) {
     delete values.intent;
   }
 
-  const caller = appRouter.createCaller({ user: await getUser({ request }) });
+  const caller = appRouter.createCaller({ user: await getUser(request) });
 
   if (intent === "add") {
     const validate = insertTodoNoUserSchema.safeParse(values);
@@ -265,7 +266,7 @@ const TodoItem = ({ todo }: TodoItemProps) => {
         </div>
         <fetcher.Form
           method="post"
-          className="sm:group-hover:block block sm:hidden"
+          className="sm:group-hover:block block sm:hidden sm:group-focus-within:block"
         >
           <input type="hidden" name="id" value={todo.id} />
           <button

@@ -1,36 +1,8 @@
-// import {
-//   serial,
-//   text,
-//   timestamp,
-//   pgTable,
-//   boolean,
-//   uuid,
-// } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { text, integer, sqliteTable } from "drizzle-orm/sqlite-core";
 import { createId } from "@paralleldrive/cuid2";
-
-// export const users = pgTable("users", {
-//   id: uuid("id").defaultRandom().primaryKey(),
-//   name: text("name"),
-//   email: text("email").unique().notNull(),
-//   hash: text("hash").unique().notNull(),
-//   role: text("role").$type<"admin" | "user">().default("user"),
-//   createdAt: timestamp("created_at").notNull().defaultNow(),
-//   updatedAt: timestamp("updated_at"),
-// });
-
-// export const todos = pgTable("todos", {
-//   id: serial("id").primaryKey(),
-//   title: text("title").notNull(),
-//   completed: boolean("completed").notNull().default(false),
-//   createdAt: timestamp("created_at").notNull().defaultNow(),
-//   userId: uuid("user_id")
-//     .notNull()
-//     .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
-// });
 
 export const users = sqliteTable("users", {
   id: text("id")
@@ -38,7 +10,7 @@ export const users = sqliteTable("users", {
     .$defaultFn(() => createId()),
   name: text("name"),
   email: text("email").unique().notNull(),
-  hash: text("hash").unique().notNull(),
+  hash: text("hash").notNull(),
   role: text("role").$type<"admin" | "user">().default("user"),
   createdAt: text("created_at")
     .notNull()

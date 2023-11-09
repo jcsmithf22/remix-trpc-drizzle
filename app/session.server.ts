@@ -2,9 +2,11 @@ import {
   createCookieSessionStorage,
   redirect,
   json,
-  type Session,
+  createSessionStorage,
 } from "@remix-run/node";
 import { db } from "./drizzle/config.server";
+import * as crypto from "crypto";
+import { Redis } from "@upstash/redis";
 
 const USER_SESSION_KEY = "userId";
 
@@ -22,12 +24,106 @@ type SessionFlashData = {
   };
 };
 
-// create session storage
+const upstashRedisRestUrl = process.env.UPSTASH_REDIS_REST_URL;
+
+if (!process.env.UPSTASH_REDIS_REST_URL) {
+  throw new Error("Missing environment variable DATABASE_URL");
+}
+
+if (!process.env.UPSTASH_REDIS_REST_TOKEN) {
+  throw new Error("Missing environment variable DATABASE_AUTH_TOKEN");
+}
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+
+// using redis for session storage
+const headers = {
+  Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}`,
+  Accept: "application/json",
+  "Content-Type": "application/json",
+};
+
+const expiresToSeconds = (expires: Date | undefined) => {
+  if (expires === undefined) {
+    // return a single day
+    return 60 * 60 * 24;
+  }
+  const now = new Date();
+  const expiresDate = new Date(expires);
+  const secondsDelta = (expiresDate.getTime() - now.getTime()) / 1000;
+  return Math.round(secondsDelta < 0 ? 0 : secondsDelta);
+};
+
+export function createUpstashSessionStorage({ cookie }: any) {
+  return createSessionStorage<SessionData>({
+    cookie,
+    async createData(data, expires) {
+      // Create a random id - taken from the core `createFileSessionStorage` Remix function.
+      const randomBytes = crypto.getRandomValues(new Uint8Array(10));
+      const id = Buffer.from(randomBytes).toString("hex");
+      // Call Upstash Redis HTTP API. Set expiration according to the cookie `expired property.
+      // Note the use of the `expiresToSeconds` that converts date to seconds.
+      await redis.set(
+        id,
+        { data },
+        {
+          ex: expiresToSeconds(expires),
+        }
+      );
+      return id;
+    },
+    async readData(id) {
+      try {
+        const result = (await redis.get(id)) as { data: SessionData } | null;
+        if (!result) throw new Error("No session found");
+        return result.data;
+      } catch (error) {
+        console.log(error);
+        return null;
+      }
+    },
+    async updateData(id, data, expires) {
+      await redis.set(
+        id,
+        { data },
+        {
+          ex: expiresToSeconds(expires),
+        }
+      );
+    },
+    async deleteData(id) {
+      await fetch(`${upstashRedisRestUrl}/del/${id}`, {
+        method: "post",
+        headers,
+      });
+    },
+  });
+}
+
+// // create session storage
+// export const {
+//   getSession: retrieveSession,
+//   commitSession,
+//   destroySession,
+// } = createCookieSessionStorage<SessionData>({
+//   cookie: {
+//     name: "__session",
+//     secrets: ["move_to_env_later"],
+//     sameSite: "strict",
+//     httpOnly: true,
+//     path: "/",
+//     secure: process.env.NODE_ENV === "production",
+//   },
+// });
+
 export const {
   getSession: retrieveSession,
   commitSession,
   destroySession,
-} = createCookieSessionStorage<SessionData, SessionFlashData>({
+} = createUpstashSessionStorage({
   cookie: {
     name: "__session",
     secrets: ["move_to_env_later"],
@@ -37,6 +133,24 @@ export const {
     secure: process.env.NODE_ENV === "production",
   },
 });
+
+export const flashSession = createCookieSessionStorage<SessionFlashData>({
+  cookie: {
+    name: "__flash",
+    secrets: ["move_to_env_later"],
+    sameSite: "lax",
+    httpOnly: true,
+    path: "/",
+    secure: process.env.NODE_ENV === "production",
+  },
+});
+
+const getUserById = (userId: string) => {
+  const user = db.query.users.findFirst({
+    where: (users, { eq }) => eq(users.id, userId),
+  });
+  return user;
+};
 
 // create functions to handle reading/writing sessions
 export const getSession = (request: Request) => {
@@ -48,51 +162,77 @@ export const getUserId = async (request: Request) => {
   return session.get(USER_SESSION_KEY);
 };
 
-export const getUser = async ({
-  request,
-  session,
-}: {
-  request?: Request;
-  session?: Session<SessionData, SessionFlashData>;
-}) => {
-  const userId =
-    (request && (await getUserId(request))) ||
-    (session && session.get(USER_SESSION_KEY));
-  if (!userId) return null;
-  const user =
-    (await db.query.users.findFirst({
-      where: (users, { eq }) => eq(users.id, userId),
-    })) || null;
-  return user;
+export const getUser = async (request: Request) => {
+  const userId = await getUserId(request);
+  if (userId === undefined) return null;
+
+  const user = await getUserById(userId);
+  if (user) return user;
+
+  throw await logout(request);
+};
+
+export const requireUserId = async (
+  request: Request,
+  redirectTo: string = new URL(request.url).pathname
+) => {
+  const userId = await getUserId(request);
+  if (!userId) {
+    const searchParams = new URLSearchParams([["redirectTo", redirectTo]]);
+    throw redirect(`/login?${searchParams}`);
+  }
+  return userId;
+};
+
+export const requireUser = async (request: Request) => {
+  const userId = await requireUserId(request);
+
+  const user = await getUserById(userId);
+  if (user) return user;
+
+  throw await logout(request);
 };
 
 export const logout = async (request: Request) => {
   const session = await getSession(request);
-  session.unset(USER_SESSION_KEY);
-  session.flash("message", {
+  const flash = await flashSession.getSession(request.headers.get("cookie"));
+  flash.flash("message", {
     id: "logout",
     title: "Logout successful",
     type: "success",
     // description: "You have been logged out.",
   });
+
+  const headers = new Headers();
+  headers.append("set-cookie", await destroySession(session));
+  headers.append("set-cookie", await flashSession.commitSession(flash));
+
   return json(null, {
-    headers: {
-      "set-cookie": await commitSession(session),
-    },
+    headers,
   });
 };
 
-export const createUserSession = async (
-  request: Request,
-  userId: string,
-  redirectPath: string = "/"
-) => {
+export const createUserSession = async ({
+  request,
+  userId,
+  remember,
+  redirectTo = "/",
+}: {
+  request: Request;
+  userId: string;
+  remember: boolean;
+  redirectTo?: string;
+}) => {
   const session = await getSession(request);
   session.set(USER_SESSION_KEY, userId);
 
-  return redirect(redirectPath, {
+  const maxAge = remember ? 60 * 60 * 24 * 30 : undefined;
+
+  return redirect(redirectTo, {
     headers: {
-      "set-cookie": await commitSession(session),
+      "set-cookie": await commitSession(session, {
+        maxAge,
+      }),
     },
   });
 };

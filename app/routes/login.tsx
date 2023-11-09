@@ -1,12 +1,19 @@
 import { type ActionFunctionArgs, json, redirect } from "@remix-run/node";
-import { Form, Link, useActionData, useNavigation } from "@remix-run/react";
+import {
+  Form,
+  Link,
+  useActionData,
+  useNavigation,
+  useSearchParams,
+} from "@remix-run/react";
 import { appRouter } from "~/server/router.server";
 import { createUserSession, getUser } from "~/session.server";
 import { loginSchema } from "~/drizzle/schema.server";
 import { type TRPCError } from "@trpc/server";
-import { type PostgresError } from "postgres";
+import { type LibsqlError } from "@libsql/client";
 import { Loader2, ArrowLeft, AlertCircle } from "lucide-react";
 import { cn } from "~/utils/functions";
+import { safeRedirect } from "~/utils/functions.server";
 
 type Error = {
   email?: string[] | undefined;
@@ -16,14 +23,14 @@ type Error = {
 
 const handleError = (error: TRPCError) => {
   console.log("TRPC ERROR", error);
-  const postgresError = error.cause as PostgresError | undefined;
+  const databaseError = error.cause as LibsqlError | undefined;
   const errorObject: Error = {};
 
   if (error.code === "NOT_FOUND") {
     errorObject.email = [error.message];
   } else if (error.code === "BAD_REQUEST") {
     errorObject.password = [error.message];
-  } else if (postgresError?.code === "23505") {
+  } else if (databaseError?.code === "SERVER_ERROR") {
     errorObject.email = ["Email already exists"];
   } else {
     errorObject.form = [error.message];
@@ -36,11 +43,10 @@ export async function action({ request }: ActionFunctionArgs) {
   const body = await request.formData();
   const values = Object.fromEntries(body.entries());
   const intent = values.intent;
-  if (values.intent) {
-    delete values.intent;
-  }
+  const remember = values.rememberMe === "on";
+  const redirectTo = safeRedirect(values.redirectTo);
 
-  const caller = appRouter.createCaller({ user: await getUser({ request }) });
+  const caller = appRouter.createCaller({ user: await getUser(request) });
 
   if (intent === "login") {
     const validate = loginSchema.safeParse(values);
@@ -55,7 +61,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
     try {
       const user = await caller.users.login(validate.data);
-      return createUserSession(request, user.id);
+      return createUserSession({
+        request,
+        userId: user.id,
+        remember,
+        redirectTo,
+      });
     } catch (error) {
       return json({
         error: handleError(error as TRPCError),
@@ -76,7 +87,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
     try {
       const [user] = await caller.users.create(validate.data);
-      return createUserSession(request, user.id);
+      return createUserSession({
+        request,
+        userId: user.id,
+        remember,
+        redirectTo,
+      });
     } catch (error) {
       return json({
         error: handleError(error as TRPCError),
@@ -88,6 +104,9 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function Login() {
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get("redirectTo") || "/";
+  console.log(redirectTo);
   const actionData = useActionData<typeof action>();
   const errors = actionData?.error;
   const navigate = useNavigation();
@@ -152,14 +171,6 @@ export default function Login() {
                 >
                   Password
                 </label>
-                {/* <div className="text-sm">
-                  <a
-                    href="#"
-                    className="font-semibold text-indigo-600 hover:text-indigo-500"
-                  >
-                    Forgot password?
-                  </a>
-                </div> */}
               </div>
               <div className="relative mt-2">
                 <input
@@ -190,6 +201,35 @@ export default function Login() {
                 </p>
               )}
             </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <input
+                  id="remember-me"
+                  name="rememberMe"
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
+                  defaultChecked={true}
+                />
+                <label
+                  htmlFor="remember-me"
+                  className="ml-3 block text-sm leading-6 text-gray-900"
+                >
+                  Remember me
+                </label>
+              </div>
+
+              {/* <div className="text-sm leading-6">
+                <a
+                  href="#"
+                  className="font-semibold text-indigo-600 hover:text-indigo-500"
+                >
+                  Forgot password?
+                </a>
+              </div> */}
+            </div>
+
+            <input type="hidden" name="redirectTo" value={redirectTo} />
 
             <div>
               <button

@@ -84,7 +84,6 @@ export const appRouter = t.router({
         email: input.email,
         hash: hashedPassword,
       };
-
       const user = await db.insert(users).values(values).returning();
       return user;
     }),
