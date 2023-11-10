@@ -30,6 +30,8 @@ export const handleError = (error: TRPCError) => {
   } else if (error.cause instanceof LibsqlError) {
     if (error.cause.code === "SERVER_ERROR") {
       errorObject.email = ["Email already exists"];
+    } else if (error.cause.code === "PROXY_ERROR") {
+      errorObject.email = ["Email already exists"];
     } else {
       errorObject.form = [error.cause.message];
     }
