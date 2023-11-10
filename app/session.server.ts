@@ -79,9 +79,11 @@ export function createUpstashSessionStorage({ cookie }: any) {
       });
     },
     async deleteData(id) {
-      //   const results = await redis.scan(0, {
-      //     match: 'data:userId:*"}}',
-      //  });
+      // const userId = id.split(":")[1];
+      // const results = await redis.scan(0, {
+      //   match: `*${userId}*`,
+      // });
+      // console.log(results);
       await redis.del(id);
     },
   });
