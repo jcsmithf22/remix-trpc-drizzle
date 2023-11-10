@@ -1,7 +1,6 @@
 import {
   createCookieSessionStorage,
   redirect,
-  json,
   createSessionStorage,
 } from "@remix-run/node";
 import { db } from "./drizzle/config.server";
@@ -13,15 +12,20 @@ const USER_SESSION_KEY = "userId";
 // create session types
 type SessionData = {
   [USER_SESSION_KEY]: string;
+  id: string;
+  missing?: true;
+};
+
+type Message = {
+  id: string;
+  title: string;
+  type: "success" | "message";
+  description?: string;
 };
 
 type SessionFlashData = {
-  message: {
-    id: string;
-    title: string;
-    type: "success" | "message";
-    description?: string;
-  };
+  message?: Message;
+  logoutMessage?: Message;
 };
 
 if (!process.env.UPSTASH_REDIS_REST_URL) {
@@ -67,10 +71,15 @@ export function createUpstashSessionStorage({ cookie }: any) {
       try {
         const result = (await redis.get(id)) as SessionData | null;
         if (!result) throw new Error("No session found");
+        result.id = id;
         return result;
       } catch (error) {
         console.log(error);
-        return null;
+        return {
+          [USER_SESSION_KEY]: "",
+          id: "",
+          missing: true,
+        };
       }
     },
     async updateData(id, data, expires) {
@@ -88,6 +97,8 @@ export function createUpstashSessionStorage({ cookie }: any) {
     },
   });
 }
+
+// we can still use cookie session storage to avoid redis costs
 
 // // create session storage
 // export const {
@@ -145,6 +156,10 @@ export const getSession = (request: Request) => {
 
 export const getUserId = async (request: Request) => {
   const session = await getSession(request);
+  // if session doesn't exist in redis, logout to delete session cookie and redirect to login
+  if (session.get("missing")) {
+    throw await logout(request, "/login");
+  }
   return session.get(USER_SESSION_KEY);
 };
 
@@ -179,23 +194,41 @@ export const requireUser = async (request: Request) => {
   throw await logout(request);
 };
 
-export const logout = async (request: Request) => {
+export const logout = async (request: Request, redirectTo: string = "/") => {
   const session = await getSession(request);
   const flash = await flashSession.getSession(request.headers.get("cookie"));
-  flash.flash("message", {
-    id: "logout",
-    title: "Logout successful",
+  flash.flash("logoutMessage", {
+    id: Math.random().toString(),
+    title: redirectTo === "/login" ? "Session expired" : "Logout successful",
     type: "success",
-    // description: "You have been logged out.",
   });
+
+  // later incorporate so that if you were logged out externally, you will return
+  // to where you were when you log back in
 
   const headers = new Headers();
   headers.append("set-cookie", await destroySession(session));
   headers.append("set-cookie", await flashSession.commitSession(flash));
 
-  return json(null, {
+  return redirect(redirectTo, {
     headers,
   });
+};
+
+export const logoutOtherSessions = async (request: Request, userId: string) => {
+  const session = await getSession(request);
+  const sessionId = session.get("id");
+
+  const results = await redis.scan(0, {
+    match: `*${userId}*`,
+  });
+
+  console.log(results);
+
+  for (const key of results[1]) {
+    if (key === sessionId) continue;
+    await redis.del(key);
+  }
 };
 
 export const createUserSession = async ({
@@ -221,4 +254,30 @@ export const createUserSession = async ({
       }),
     },
   });
+};
+
+export const setFlash = async (
+  request: Request,
+  name: "message" | "logoutMessage",
+  message: Message
+) => {
+  const flash = await flashSession.getSession(request.headers.get("cookie"));
+  flash.flash(name, message);
+
+  return {
+    "set-cookie": await flashSession.commitSession(flash),
+  };
+};
+
+export const getFlash = async (
+  request: Request,
+  name: "message" | "logoutMessage"
+) => {
+  const flash = await flashSession.getSession(request.headers.get("cookie"));
+  const message = flash.get(name);
+
+  return {
+    message,
+    headers: { "set-cookie": await flashSession.commitSession(flash) },
+  };
 };

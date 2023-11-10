@@ -10,34 +10,11 @@ import { appRouter } from "~/server/router.server";
 import { createUserSession, getUser } from "~/session.server";
 import { loginSchema } from "~/drizzle/schema.server";
 import { type TRPCError } from "@trpc/server";
-import { type LibsqlError } from "@libsql/client";
 import { Loader2, ArrowLeft, AlertCircle } from "lucide-react";
 import { cn } from "~/utils/functions";
 import { safeRedirect } from "~/utils/functions.server";
 
-type Error = {
-  email?: string[] | undefined;
-  password?: string[] | undefined;
-  form?: string[] | undefined;
-};
-
-const handleError = (error: TRPCError) => {
-  console.log("TRPC ERROR", error);
-  const databaseError = error.cause as LibsqlError | undefined;
-  const errorObject: Error = {};
-
-  if (error.code === "NOT_FOUND") {
-    errorObject.email = [error.message];
-  } else if (error.code === "BAD_REQUEST") {
-    errorObject.password = [error.message];
-  } else if (databaseError?.code === "SERVER_ERROR") {
-    errorObject.email = ["Email already exists"];
-  } else {
-    errorObject.form = [error.message];
-  }
-
-  return errorObject;
-};
+import { type Error, handleError } from "~/utils/functions";
 
 export async function action({ request }: ActionFunctionArgs) {
   const body = await request.formData();
@@ -46,7 +23,10 @@ export async function action({ request }: ActionFunctionArgs) {
   const remember = values.rememberMe === "on";
   const redirectTo = safeRedirect(values.redirectTo);
 
-  const caller = appRouter.createCaller({ user: await getUser(request) });
+  const caller = appRouter.createCaller({
+    request,
+    user: await getUser(request),
+  });
 
   if (intent === "login") {
     const validate = loginSchema.safeParse(values);
@@ -106,13 +86,13 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function Login() {
   const [searchParams] = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") || "/";
-  console.log(redirectTo);
   const actionData = useActionData<typeof action>();
   const errors = actionData?.error;
   const navigate = useNavigation();
   const intent = (navigate.formData?.get("intent") as string) || null;
   const loading =
     navigate.state === "submitting" || navigate.state === "loading";
+
   return (
     <div className="mx-auto px-4 sm:px-6 lg:px-8 w-full max-w-[512px]">
       <div className="overflow-hidden rounded-md bg-white shadow my-4">

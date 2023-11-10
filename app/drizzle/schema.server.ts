@@ -46,3 +46,17 @@ export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8, "Password must be at least 8 characters long"),
 });
+
+export const changePasswordSchema = z.object({
+  currentPassword: z
+    .string()
+    .min(8, "Password must be at least 8 characters long"),
+  newPassword: z.string().min(8, "Password must be at least 8 characters long"),
+  confirmPassword: z
+    .string()
+    .min(8, "Password must be at least 8 characters long"),
+});
+
+export const passwordSchema = z.object({
+  password: z.string().min(8, "Password must be at least 8 characters long"),
+});

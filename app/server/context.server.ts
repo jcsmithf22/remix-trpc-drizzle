@@ -7,7 +7,7 @@ export async function createContext({
   resHeaders,
 }: FetchCreateContextFnOptions) {
   const user = await getUser(req);
-  return { user };
+  return { request: req, user };
 }
 
 export type Context = inferAsyncReturnType<typeof createContext>;

@@ -3,17 +3,16 @@ import {
   type LoaderFunctionArgs,
   type ActionFunctionArgs,
   type MetaFunction,
-  redirect,
 } from "@remix-run/node";
 import { useFetcher, useLoaderData, Link } from "@remix-run/react";
 import { insertTodoNoUserSchema } from "~/drizzle/schema.server";
 import { appRouter } from "~/server/router.server";
 import { z } from "zod";
-import { CheckIcon, Loader2, XIcon } from "lucide-react";
+import { CheckIcon, Loader2, Settings, XIcon } from "lucide-react";
 import React from "react";
-import { flashSession, getUser } from "~/session.server";
-import type { TRPCError } from "@trpc/server";
-import { toast as showToast } from "sonner";
+import { getUser } from "~/session.server";
+import { type TRPCError } from "@trpc/server";
+import { type Error, handleError } from "~/utils/functions";
 
 export const meta: MetaFunction = () => {
   return [
@@ -23,44 +22,15 @@ export const meta: MetaFunction = () => {
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const flash = await flashSession.getSession(request.headers.get("cookie"));
-  const message = flash.get("message");
-
   const user = await getUser(request);
-  const caller = appRouter.createCaller({ user });
+  const caller = appRouter.createCaller({ request, user });
   const todos = await caller.todos.all();
 
-  return json(
-    {
-      todos,
-      user,
-      message,
-    },
-    {
-      headers: {
-        "set-cookie": await flashSession.commitSession(flash),
-      },
-    }
-  );
+  return json({
+    todos,
+    user,
+  });
 }
-
-type Error = {
-  id?: string[] | undefined;
-  title?: string[] | undefined;
-  completed?: string[] | undefined;
-  createdAt?: string[] | undefined;
-  form?: string[] | undefined;
-};
-
-const handleError = (error: TRPCError) => {
-  console.log("TRPC ERROR", error);
-  if (error.code === "UNAUTHORIZED") {
-    throw redirect("/login");
-  }
-  const errorObject: Error = {};
-  errorObject.form = [error.message];
-  return errorObject;
-};
 
 const toggleTodoSchema = z.object({
   id: z.coerce.number(),
@@ -79,7 +49,10 @@ export async function action({ request }: ActionFunctionArgs) {
     delete values.intent;
   }
 
-  const caller = appRouter.createCaller({ user: await getUser(request) });
+  const caller = appRouter.createCaller({
+    request,
+    user: await getUser(request),
+  });
 
   if (intent === "add") {
     const validate = insertTodoNoUserSchema.safeParse(values);
@@ -147,7 +120,7 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function Index() {
-  const { todos, user, message } = useLoaderData<typeof loader>();
+  const { todos, user } = useLoaderData<typeof loader>();
   const username = user?.email || user?.name || null;
   const fetcher = useFetcher<typeof action>();
   const logoutFetcher = useFetcher();
@@ -172,10 +145,16 @@ export default function Index() {
     <>
       <div className="mx-auto max-w-2xl px-4 sm:px-6 lg:px-8">
         <div className="overflow-hidden rounded-md bg-white shadow my-4">
-          <div className="border-b border-gray-200 bg-white px-4 py-5 sm:px-6">
+          <div className="flex justify-between items-center border-b border-gray-200 bg-white px-4 py-5 sm:px-6">
             <h3 className="text-base font-semibold leading-6 text-gray-900">
               Todos
             </h3>
+            <Link
+              to="/settings"
+              className="p-2 rounded-full hover:bg-gray-100 -m-2"
+            >
+              <Settings className="w-5 h-5 text-gray-600" strokeWidth={1.5} />
+            </Link>
           </div>
           <ul className="divide-y divide-gray-200">
             {username ? (
@@ -213,7 +192,6 @@ export default function Index() {
         </logoutFetcher.Form>
         <p>{username || "not logged in"}</p>
       </div>
-      {message && <ShowToast toast={message} />}
     </>
   );
 }
@@ -250,7 +228,7 @@ const TodoItem = ({ todo }: TodoItemProps) => {
             type="submit"
             value="toggle"
             name="intent"
-            className={`w-8 h-8 rounded-full border ${
+            className={`w-8 h-8 rounded-full border hover:bg-gray-50 ${
               completed ? "border-blue-200" : "border-gray-200"
             } flex items-center justify-center`}
           >
@@ -282,18 +260,3 @@ const TodoItem = ({ todo }: TodoItemProps) => {
     </li>
   );
 };
-
-function ShowToast({ toast }: { toast: any }) {
-  const { id, type, title, description } = toast as {
-    id: string;
-    type: "success" | "message";
-    title: string;
-    description?: string;
-  };
-  React.useEffect(() => {
-    // setTimeout(() => {
-    showToast[type](title, { id, description });
-    // }, 0);
-  }, [description, id, title, type]);
-  return null;
-}
